@@ -1,0 +1,20 @@
+# ── Node ──────────────────────────────────
+node_modules/
+npm-debug.log*
+
+# ── Database (contains personal sensor data) ──
+backend/sses.db
+backend/sses.db-shm
+backend/sses.db-wal
+
+# ── Environment files ──────────────────────
+.env
+.env.local
+.env.*
+
+# ── Vite build output ──────────────────────
+frontend/dist/
+
+# ── OS files ──────────────────────────────
+.DS_Store
+Thumbs.db
