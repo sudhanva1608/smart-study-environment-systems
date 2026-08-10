@@ -1,7 +1,7 @@
 /*
   Smart Study Environment Sensing System (SSES)
   ESP32 Firmware — WiFi Edition
-  
+
   Sends sensor data to Node.js backend via HTTP POST every 2 seconds.
   Update WIFI_SSID, WIFI_PASS, and SERVER_IP before uploading.
 */
@@ -12,12 +12,12 @@
 #include <ArduinoJson.h>
 
 // ─── WiFi Config ─────────────────────────────────────────
-const char* WIFI_SSID = "YOUR_WIFI_SSID";      // ← Replace with your WiFi name
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";  // ← Replace with your WiFi password
+const char* WIFI_SSID = "Excitel_2.4G No Internet";      // ← Replace with your WiFi name
+const char* WIFI_PASS = "danzocmtrs";  // ← Replace with your WiFi password
 
 // ─── Backend Config ───────────────────────────────────────
 // Run `ipconfig` on your PC and use the IPv4 address shown under Wi-Fi
-const char* SERVER_IP   = "YOUR_PC_LOCAL_IP";  // ← e.g. 192.168.1.40
+const char* SERVER_IP   = "192.168.1.33";  // ← e.g. 192.168.1.33
 const int   SERVER_PORT = 3001;
 const char* ENDPOINT    = "/api/sensor-data";
 
@@ -32,6 +32,19 @@ const char* ENDPOINT    = "/api/sensor-data";
 
 DHT dht(DHTPIN, DHTTYPE);
 
+// ─── Helper: connect to Wi‑Fi with timeout ─────────────────
+bool connectWiFi(uint32_t timeoutMs = 15000) {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
+    delay(250);
+    Serial.print('.');
+  }
+  Serial.println();
+  return WiFi.status() == WL_CONNECTED;
+}
+
 // ─── Setup ────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
@@ -42,57 +55,67 @@ void setup() {
   pinMode(YELLOW_LED, OUTPUT);
   pinMode(RED_LED, OUTPUT);
 
-  // Connect to WiFi
-  Serial.printf("\nConnecting to %s", WIFI_SSID);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✅ WiFi connected!");
-    Serial.print("   IP Address: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("\n❌ WiFi failed — running in serial-only mode");
+  // Try to connect; if it fails we’ll retry in loop
+  if (!connectWiFi()) {
+    Serial.println("⚠️ WiFi not connected – will retry in loop");
   }
 }
 
 // ─── Send Data to Backend ─────────────────────────────────
-void sendData(float temp, float hum, int light, int airQuality, const char* status) {
-  if (WiFi.status() != WL_CONNECTED) return;
+bool sendDataWithRetry(float temp, float hum, int light, int airQuality, const char* status, int maxAttempts = 3) {
+  if (WiFi.status() != WL_CONNECTED) {
+    if (!connectWiFi(5000)) { // quick reconnect attempt
+      return false;
+    }
+  }
 
   HTTPClient http;
   String url = "http://" + String(SERVER_IP) + ":" + SERVER_PORT + ENDPOINT;
-  http.begin(url);
-  http.addHeader("Content-Type", "application/json");
+  bool success = false;
 
-  // Build JSON payload
-  StaticJsonDocument<256> doc;
-  doc["temperature"] = temp;
-  doc["humidity"]    = hum;
-  doc["light"]       = light;
-  doc["airQuality"]  = airQuality;
-  doc["status"]      = status;
+  for (int attempt = 0; attempt < maxAttempts && !success; ++attempt) {
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
 
-  String payload;
-  serializeJson(doc, payload);
+    // Build JSON payload
+    StaticJsonDocument<256> doc;
+    doc["temperature"] = temp;
+    doc["humidity"]    = hum;
+    doc["light"]       = light;
+    doc["airQuality"]  = airQuality;
+    doc["status"]      = status;
 
-  int code = http.POST(payload);
-  if (code == 200) {
-    Serial.printf("   [HTTP] ✅ Sent — Response: %d\n", code);
-  } else {
-    Serial.printf("   [HTTP] ❌ Failed — Code: %d\n", code);
+    String payload;
+    serializeJson(doc, payload);
+
+    int code = http.POST(payload);
+    if (code >= 200 && code < 300) {
+      Serial.printf("   [HTTP] ✅ Sent — Response: %d\n", code);
+      success = true;
+    } else {
+      Serial.printf("   [HTTP] ❌ Failed — Code: %d (attempt %d/%d)\n", code, attempt + 1, maxAttempts);
+    }
+    http.end();
+    if (!success && attempt < maxAttempts - 1) {
+      delay(1000); // wait before retry
+    }
   }
-  http.end();
+  return success;
 }
 
 // ─── Main Loop ────────────────────────────────────────────
 void loop() {
+  // (Re‑connect if we lost Wi‑Fi)
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\n📶 Wi‑Fi lost, reconnecting...");
+    if (!connectWiFi()) {
+      Serial.println("❌ Re‑try failed – waiting 5s before next attempt");
+      delay(5000);
+      return;   // skip this cycle, try again later
+    }
+    Serial.println("✅ Wi‑Fi reconnected!");
+  }
+
   float temp = dht.readTemperature();
   float hum  = dht.readHumidity();
   int lightValue = analogRead(LDR_PIN);
@@ -142,9 +165,9 @@ void loop() {
     Serial.println("❌ Poor study environment");
   }
 
-  // Send data to dashboard backend
-  sendData(temp, hum, lightValue, airValue, status);
+  // Send data to dashboard backend with retries
+  sendDataWithRetry(temp, hum, lightValue, airValue, status);
 
   Serial.println("---------------------------");
-  delay(2000);
+  delay(2000);   // keep your 2‑second interval
 }

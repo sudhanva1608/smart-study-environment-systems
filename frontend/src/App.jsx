@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip,
@@ -79,7 +79,7 @@ const SensorCard = ({ type, icon, label, value, unit, min, max, barPercent, pill
 };
 
 // ─── Mini Chart ───────────────────────────────────────────
-const MiniChart = ({ data, color, title, unit, gradId }) => (
+const MiniChart = ({ data, color, title, unit, gradId, yDomain, yTicks }) => (
   <div className="chart-card">
     <div className="chart-title">
       <div className="chart-title-dot" style={{ background: color }} />
@@ -95,7 +95,14 @@ const MiniChart = ({ data, color, title, unit, gradId }) => (
         </defs>
         <CartesianGrid strokeDasharray="3 3" stroke="#1a1a2e" />
         <XAxis dataKey="time" tick={{ fill:'#3d4452', fontSize:9, fontFamily:'Share Tech Mono' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-        <YAxis tick={{ fill:'#3d4452', fontSize:9, fontFamily:'Share Tech Mono' }} tickLine={false} axisLine={false} width={40} />
+        <YAxis
+          tick={{ fill:'#3d4452', fontSize:9, fontFamily:'Share Tech Mono' }}
+          tickLine={false}
+          axisLine={false}
+          width={40}
+          {...(yDomain ? { domain: yDomain } : {})}
+          {...(yTicks  ? { ticks: yTicks   } : {})}
+        />
         <Tooltip content={<CustomTooltip unit={unit} />} />
         <Area type="monotone" dataKey="value" stroke={color} strokeWidth={1.5} fill={`url(#${gradId})`} dot={false}
           activeDot={{ r:4, fill:color, stroke:'var(--bg-primary)', strokeWidth:2 }} />
@@ -220,10 +227,10 @@ export default function App() {
     return () => socket.disconnect();
   }, []);
 
-  // Refresh history table when tab opens
+  // Refresh history table when tab opens or page changes
   useEffect(() => {
     if (activeTab === 'history') fetchHistory(histPage);
-  }, [activeTab]);
+  }, [activeTab, histPage]);
 
   // ── CSV Export ─────────────────────────────────────────
   const handleExport = () => {
@@ -276,7 +283,9 @@ export default function App() {
           </div>
           <div className="header-right">
             {lastUpdated && (
-              <div className="last-updated">UPD {lastUpdated.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', second:'2-digit' })}</div>
+              <div className="last-updated">
+                UPD {new Date(lastUpdated).toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', second:'2-digit' })}
+              </div>
             )}
             <button className="export-btn" onClick={handleExport} title="Download all readings as CSV">
               ⬇ Export CSV
@@ -334,13 +343,16 @@ export default function App() {
                 <div className="no-data-sub">
                   Ensure ESP32 is posting to<br />
                   <span style={{ color:'var(--cyan)', fontFamily:'var(--font-mono)' }}>
-                    http://&lt;YOUR_PC_IP&gt;:3001/api/sensor-data
+                    http://[YOUR_PC_IP]:3001/api/sensor-data
                   </span>
                 </div>
               </div>
             ) : (
               <div className="charts-grid">
-                <MiniChart data={history.temperature} color="#ff6b35" title="Temperature"  unit="°C"  gradId="g-temp"  />
+                <MiniChart data={history.temperature} color="#ff6b35" title="Temperature"  unit="°C"  gradId="g-temp"
+                  yDomain={[25, 35]}
+                  yTicks={[25,26,27,28,29,30,31,32,33,34,35]}
+                />
                 <MiniChart data={history.humidity}    color="#00d4ff" title="Humidity"     unit="%"   gradId="g-hum"   />
                 <MiniChart data={history.airQuality}  color="#00ff9d" title="Air Quality"  unit="ADC" gradId="g-air"   />
                 <MiniChart data={history.light}       color="#ffd60a" title="Light Level"  unit="ADC" gradId="g-light" />

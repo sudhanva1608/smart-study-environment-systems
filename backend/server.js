@@ -15,6 +15,13 @@ const io = new Server(server, {
 app.use(cors());
 app.use(express.json());
 
+// ─── Request Logger (debug all incoming requests) ──────────
+app.use((req, res, next) => {
+  const body = req.method === 'POST' ? JSON.stringify(req.body) : '';
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} ${body ? '← ' + body : ''}`);
+  next();
+});
+
 // ─── Database Setup ───────────────────────────────────────
 const db = new Database(path.join(__dirname, 'sses.db'));
 
@@ -43,6 +50,39 @@ const MAX_CHART = 60;
 const chartHistory = {
   temperature: [], humidity: [], light: [], airQuality: [],
 };
+
+// ─── Seed from DB on startup ──────────────────────────────
+(function seedFromDB() {
+  // Load the last MAX_CHART readings in chronological order
+  const rows = db.prepare(
+    'SELECT * FROM readings ORDER BY recorded_at DESC LIMIT ?'
+  ).all(MAX_CHART).reverse();
+
+  if (!rows.length) return;
+
+  for (const r of rows) {
+    const tick = { time: fmtTime(r.recorded_at) };
+    chartHistory.temperature.push({ ...tick, value: r.temperature });
+    chartHistory.humidity.push({    ...tick, value: r.humidity    });
+    chartHistory.light.push({       ...tick, value: r.light       });
+    chartHistory.airQuality.push({  ...tick, value: r.air_quality });
+  }
+
+  // Seed latestData from the most recent row
+  const last = rows[rows.length - 1];
+  latestData = {
+    temperature: last.temperature,
+    humidity:    last.humidity,
+    light:       last.light,
+    airQuality:  last.air_quality,
+    status:      last.status,
+    lightLabel:  last.light_label,
+    timestamp:   last.recorded_at,
+  };
+
+  console.log(`[Seed] Loaded ${rows.length} readings into chart history from DB.`);
+  console.log(`[Seed] Latest: Temp=${latestData.temperature}°C Hum=${latestData.humidity}% Status=${latestData.status}`);
+})()
 
 // ─── Helpers ──────────────────────────────────────────────
 function determineStatus({ temperature, humidity, airQuality }) {
@@ -216,9 +256,21 @@ io.on('connection', (socket) => {
 
 // ─── Start ────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n❌ Port ${PORT} is already in use!`);
+    console.error(`   Run this to fix it: npx kill-port ${PORT}`);
+    console.error(`   Or in PowerShell:   Stop-Process -Id (Get-NetTCPConnection -LocalPort ${PORT}).OwningProcess -Force\n`);
+    process.exit(1);
+  } else {
+    throw err;
+  }
+});
+
 server.listen(PORT, '0.0.0.0', () => {
   const count = db.prepare('SELECT COUNT(*) as n FROM readings').get().n;
   console.log(`\n🚀 SSES Backend on port ${PORT}`);
   console.log(`   DB: ${count} readings loaded from sses.db`);
-  console.log(`   ESP32 endpoint → http://<PC_IP>:${PORT}/api/sensor-data\n`);
+  console.log(`   ESP32 endpoint → http://<PC_IP>:${PORT}/api/sensor-data`);
+  console.log(`   All incoming requests are logged above.\n`);
 });
