@@ -15,7 +15,12 @@
   "dependencies": {
     "better-sqlite3": "^12.10.0",
     "cors": "^2.8.6",
+    "dotenv": "^16.4.7",
     "express": "^5.2.1",
+    "mqtt": "^5.10.3",
+    "axios": "^1.7.9",
+    "@supabase/supabase-js": "^2.48.1",
     "socket.io": "^4.8.3"
   }
 }
+

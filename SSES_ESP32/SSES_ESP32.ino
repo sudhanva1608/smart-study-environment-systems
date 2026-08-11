@@ -1,25 +1,32 @@
 /*
   Smart Study Environment Sensing System (SSES)
-  ESP32 Firmware — WiFi Edition
+  ESP32 Firmware — MQTT & Cloud Edition
 
-  Sends sensor data to Node.js backend via HTTP POST every 2 seconds.
-  Update WIFI_SSID, WIFI_PASS, and SERVER_IP before uploading.
+  Publishes sensor readings to Cloud MQTT Broker (HiveMQ Cloud / Mosquitto)
+  over SSL/TLS on topic: sses/sensors/telemetry
+  Subscribes to actuator topic: sses/actuators/leds
 */
 
 #include "DHT.h"
 #include <WiFi.h>
-#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
 #include <ArduinoJson.h>
 
 // ─── WiFi Config ─────────────────────────────────────────
 const char* WIFI_SSID = "Excitel_2.4G No Internet";      // ← Replace with your WiFi name
 const char* WIFI_PASS = "danzocmtrs";  // ← Replace with your WiFi password
 
-// ─── Backend Config ───────────────────────────────────────
-// Run `ipconfig` on your PC and use the IPv4 address shown under Wi-Fi
-const char* SERVER_IP   = "192.168.1.33";  // ← e.g. 192.168.1.33
-const int   SERVER_PORT = 3001;
-const char* ENDPOINT    = "/api/sensor-data";
+// ─── MQTT Broker Config ──────────────────────────────────
+// HiveMQ Cloud details (or local/public MQTT broker)
+const char* MQTT_BROKER = "71fb498cb7b743f3941268421fa55d17.s1.eu.hivemq.cloud";
+const int   MQTT_PORT   = 8883;
+const char* MQTT_USER   = "sudhanva16";
+const char* MQTT_PASS   = "Sudhu*123";      
+const char* CLIENT_ID     = "ESP32_SSES_Node";
+
+const char* TOPIC_TELEMETRY = "sses/sensors/telemetry";
+const char* TOPIC_ACTUATOR  = "sses/actuators/leds";
 
 // ─── Pin Definitions ──────────────────────────────────────
 #define DHTPIN    4
@@ -32,7 +39,12 @@ const char* ENDPOINT    = "/api/sensor-data";
 
 DHT dht(DHTPIN, DHTTYPE);
 
-// ─── Helper: connect to Wi‑Fi with timeout ─────────────────
+WiFiClientSecure espClient; 
+PubSubClient mqttClient(espClient);
+
+unsigned long lastMsgTime = 0;
+
+// ─── Helper: Connect Wi-Fi ─────────────────────────────────
 bool connectWiFi(uint32_t timeoutMs = 15000) {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -45,6 +57,48 @@ bool connectWiFi(uint32_t timeoutMs = 15000) {
   return WiFi.status() == WL_CONNECTED;
 }
 
+// ─── MQTT Callback (Receive messages from Cloud) ───────────
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String message;
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  Serial.printf("📩 [MQTT Recv] Topic: %s | Payload: %s\n", topic, message.c_str());
+
+  StaticJsonDocument<256> doc;
+  DeserializationError err = deserializeJson(doc, message);
+  if (!err) {
+    if (doc.containsKey("ledOverride")) {
+      const char* color = doc["ledOverride"];
+      digitalWrite(GREEN_LED,  String(color) == "green"  ? HIGH : LOW);
+      digitalWrite(YELLOW_LED, String(color) == "yellow" ? HIGH : LOW);
+      digitalWrite(RED_LED,    String(color) == "red"    ? HIGH : LOW);
+    }
+  }
+}
+
+// ─── Reconnect to MQTT Broker ──────────────────────────────
+void reconnectMQTT() {
+  while (!mqttClient.connected()) {
+    Serial.printf("🔌 Connecting to MQTT Broker (%s:%d)... ", MQTT_BROKER, MQTT_PORT);
+    bool connected = false;
+    if (strlen(MQTT_USER) > 0) {
+      connected = mqttClient.connect(CLIENT_ID, MQTT_USER, MQTT_PASS);
+    } else {
+      connected = mqttClient.connect(CLIENT_ID);
+    }
+
+    if (connected) {
+      Serial.println("✅ Connected to MQTT Broker!");
+      mqttClient.subscribe(TOPIC_ACTUATOR);
+      Serial.printf("📡 Subscribed to topic: %s\n", TOPIC_ACTUATOR);
+    } else {
+      Serial.printf("❌ MQTT Connect failed, rc=%d. Retrying in 5s...\n", mqttClient.state());
+      delay(5000);
+    }
+  }
+}
+
 // ─── Setup ────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
@@ -55,119 +109,81 @@ void setup() {
   pinMode(YELLOW_LED, OUTPUT);
   pinMode(RED_LED, OUTPUT);
 
-  // Try to connect; if it fails we’ll retry in loop
   if (!connectWiFi()) {
-    Serial.println("⚠️ WiFi not connected – will retry in loop");
-  }
-}
-
-// ─── Send Data to Backend ─────────────────────────────────
-bool sendDataWithRetry(float temp, float hum, int light, int airQuality, const char* status, int maxAttempts = 3) {
-  if (WiFi.status() != WL_CONNECTED) {
-    if (!connectWiFi(5000)) { // quick reconnect attempt
-      return false;
-    }
+    Serial.println("⚠️ WiFi connection pending – will retry in main loop");
   }
 
-  HTTPClient http;
-  String url = "http://" + String(SERVER_IP) + ":" + SERVER_PORT + ENDPOINT;
-  bool success = false;
+  // Allow SSL connection to HiveMQ Cloud on port 8883
+  espClient.setInsecure();
 
-  for (int attempt = 0; attempt < maxAttempts && !success; ++attempt) {
-    http.begin(url);
-    http.addHeader("Content-Type", "application/json");
-
-    // Build JSON payload
-    StaticJsonDocument<256> doc;
-    doc["temperature"] = temp;
-    doc["humidity"]    = hum;
-    doc["light"]       = light;
-    doc["airQuality"]  = airQuality;
-    doc["status"]      = status;
-
-    String payload;
-    serializeJson(doc, payload);
-
-    int code = http.POST(payload);
-    if (code >= 200 && code < 300) {
-      Serial.printf("   [HTTP] ✅ Sent — Response: %d\n", code);
-      success = true;
-    } else {
-      Serial.printf("   [HTTP] ❌ Failed — Code: %d (attempt %d/%d)\n", code, attempt + 1, maxAttempts);
-    }
-    http.end();
-    if (!success && attempt < maxAttempts - 1) {
-      delay(1000); // wait before retry
-    }
-  }
-  return success;
+  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
 }
 
 // ─── Main Loop ────────────────────────────────────────────
 void loop() {
-  // (Re‑connect if we lost Wi‑Fi)
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\n📶 Wi‑Fi lost, reconnecting...");
+    Serial.println("📶 Wi-Fi lost, reconnecting...");
     if (!connectWiFi()) {
-      Serial.println("❌ Re‑try failed – waiting 5s before next attempt");
       delay(5000);
-      return;   // skip this cycle, try again later
+      return;
     }
-    Serial.println("✅ Wi‑Fi reconnected!");
   }
 
-  float temp = dht.readTemperature();
-  float hum  = dht.readHumidity();
-  int lightValue = analogRead(LDR_PIN);
-  int airValue   = analogRead(MQ135_PIN);
-
-  // Validate DHT reading
-  if (isnan(temp) || isnan(hum)) {
-    Serial.println("❌ DHT read failed — skipping cycle");
-    delay(2000);
-    return;
+  if (!mqttClient.connected()) {
+    reconnectMQTT();
   }
+  mqttClient.loop();
 
-  Serial.printf("Temp: %.1f°C  Hum: %.1f%%  Light: %d  AQ: %d\n",
-                temp, hum, lightValue, airValue);
+  unsigned long now = millis();
+  if (now - lastMsgTime > 2000) { // Every 2 seconds
+    lastMsgTime = now;
 
-  const char* status;
+    float temp = dht.readTemperature();
+    float hum  = dht.readHumidity();
+    int lightValue = analogRead(LDR_PIN);
+    int airValue   = analogRead(MQ135_PIN);
 
-  // IDEAL CONDITIONS
-  if (temp >= 20 && temp <= 28 &&
-      hum  >= 40 && hum  <= 65 &&
-      lightValue < 3500 &&
-      airValue   < 350) {
+    if (isnan(temp) || isnan(hum)) {
+      Serial.println("❌ DHT read failed — skipping cycle");
+      return;
+    }
 
-    digitalWrite(GREEN_LED,  HIGH);
-    digitalWrite(YELLOW_LED, LOW);
-    digitalWrite(RED_LED,    LOW);
-    status = "Ideal";
-    Serial.println("✅ Ideal study environment");
+    const char* status;
+    if (temp >= 20 && temp <= 28 && hum >= 40 && hum <= 65 && lightValue < 3500 && airValue < 350) {
+      digitalWrite(GREEN_LED,  HIGH);
+      digitalWrite(YELLOW_LED, LOW);
+      digitalWrite(RED_LED,    LOW);
+      status = "Ideal";
+    } else if ((temp > 28 && temp <= 32) || (hum > 65 && hum <= 75) || (airValue >= 350 && airValue < 500)) {
+      digitalWrite(GREEN_LED,  LOW);
+      digitalWrite(YELLOW_LED, HIGH);
+      digitalWrite(RED_LED,    LOW);
+      status = "Moderate";
+    } else {
+      digitalWrite(GREEN_LED,  LOW);
+      digitalWrite(YELLOW_LED, LOW);
+      digitalWrite(RED_LED,    HIGH);
+      status = "Poor";
+    }
 
-  // MODERATE CONDITIONS
-  } else if ((temp > 28 && temp <= 32) ||
-             (hum  > 65 && hum  <= 75) ||
-             (airValue >= 350 && airValue < 500)) {
+    StaticJsonDocument<256> doc;
+    doc["temperature"] = temp;
+    doc["humidity"]    = hum;
+    doc["light"]       = lightValue;
+    doc["airQuality"]  = airValue;
+    doc["status"]      = status;
+    doc["deviceId"]    = CLIENT_ID;
+    doc["timestamp"]   = millis();
 
-    digitalWrite(GREEN_LED,  LOW);
-    digitalWrite(YELLOW_LED, HIGH);
-    digitalWrite(RED_LED,    LOW);
-    status = "Moderate";
-    Serial.println("⚠ Moderate environment");
+    char payload[256];
+    serializeJson(doc, payload);
 
-  // POOR CONDITIONS
-  } else {
-    digitalWrite(GREEN_LED,  LOW);
-    digitalWrite(YELLOW_LED, LOW);
-    digitalWrite(RED_LED,    HIGH);
-    status = "Poor";
-    Serial.println("❌ Poor study environment");
+    bool pubStatus = mqttClient.publish(TOPIC_TELEMETRY, payload);
+    if (pubStatus) {
+      Serial.printf("   [MQTT] 📡 Published to %s: %s\n", TOPIC_TELEMETRY, payload);
+    } else {
+      Serial.println("   [MQTT] ❌ Publish failed");
+    }
   }
-
-  // Send data to dashboard backend with retries
-  sendDataWithRetry(temp, hum, lightValue, airValue, status);
-
-  Serial.println("---------------------------");
-  delay(2000);   // keep your 2‑second interval
 }
