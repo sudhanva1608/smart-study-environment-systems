@@ -6,6 +6,10 @@ npm-debug.log*
 backend/sses.db
 backend/sses.db-shm
 backend/sses.db-wal
+backend/models/
+backend/__pycache__/
+backend/tests/__pycache__/
+backend/.venv/
 
 # ── Environment files ──────────────────────
 .env
@@ -18,3 +22,6 @@ frontend/dist/
 # ── OS files ──────────────────────────────
 .DS_Store
 Thumbs.db
+
+# Local pre-upgrade backup
+.sses-backup-20261019/

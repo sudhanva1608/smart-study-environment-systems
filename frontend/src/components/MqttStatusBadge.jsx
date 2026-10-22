@@ -1,8 +1,10 @@
-import React from 'react';
 import { ShieldCheck, Cpu, Wifi } from 'lucide-react';
+import { getForecastModels, getForecastMethodDetails } from '../forecastModels';
 
-export default function MqttStatusBadge({ mqttStatus, stats }) {
-  const isConnected = mqttStatus?.connected ?? true;
+export default function MqttStatusBadge({ mqttStatus, stats, forecastData }) {
+  const isConnected = mqttStatus?.connected ?? false;
+  const forecastModels = getForecastModels(forecastData?.latest?.methods);
+  const analysisLabel = forecastModels.length ? `Rules alerts · ML forecast: ${forecastModels.join(' + ')}` : 'Rules alerts · ML forecast pending';
 
   return (
     <div className="mqtt-status-banner">
@@ -17,14 +19,14 @@ export default function MqttStatusBadge({ mqttStatus, stats }) {
 
       <div className="status-item">
         <ShieldCheck size={16} className="icon" />
-        <span className="status-label">CLOUD DB:</span>
-        <span className="status-badge sync-active">Synced ({stats?.reading_count || 0} Records)</span>
+        <span className="status-label">LOCAL HISTORY:</span>
+        <span className="status-badge sync-active">SQLite ({stats?.reading_count || 0} today)</span>
       </div>
 
       <div className="status-item">
         <Cpu size={16} className="icon" />
-        <span className="status-label">ML ENGINE:</span>
-        <span className="status-badge ml-active">Ridge Regressor Active</span>
+        <span className="status-label">ANALYSIS:</span>
+        <span className="status-badge ml-active" title={getForecastMethodDetails(forecastData?.latest?.methods)}>{analysisLabel}</span>
       </div>
     </div>
   );

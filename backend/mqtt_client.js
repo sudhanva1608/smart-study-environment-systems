@@ -1,6 +1,6 @@
 const mqtt = require('mqtt');
 
-function initMQTT(onTelemetryReceived) {
+function initMQTT(onTelemetryReceived, onStatusChange = () => {}) {
   const brokerUrl = process.env.MQTT_BROKER_URL || 'mqtt://broker.hivemq.com:1883';
   const topicTelemetry = process.env.MQTT_TOPIC_TELEMETRY || 'sses/sensors/telemetry';
   const topicActuator = process.env.MQTT_TOPIC_ACTUATOR || 'sses/actuators/leds';
@@ -17,13 +17,21 @@ function initMQTT(onTelemetryReceived) {
     options.password = process.env.MQTT_PASSWORD;
   }
 
-  console.log(`[MQTT] 🔌 Connecting to MQTT Broker at ${brokerUrl}...`);
+  let safeBrokerUrl = brokerUrl;
+  try {
+    const safe = new URL(brokerUrl);
+    safe.username = '';
+    safe.password = '';
+    safeBrokerUrl = safe.toString();
+  } catch { safeBrokerUrl = '(configured MQTT broker)'; }
+  console.log(`[MQTT] 🔌 Connecting to MQTT Broker at ${safeBrokerUrl}...`);
   const client = mqtt.connect(brokerUrl, options);
 
   let isConnected = false;
 
   client.on('connect', () => {
     isConnected = true;
+    onStatusChange({ connected: true, broker: safeBrokerUrl, topic: topicTelemetry });
     console.log(`[MQTT] ✅ Connected to Cloud MQTT Broker! Subscribing to: ${topicTelemetry}`);
     client.subscribe(topicTelemetry, (err) => {
       if (err) console.error('[MQTT] ❌ Subscription error:', err);
@@ -33,22 +41,31 @@ function initMQTT(onTelemetryReceived) {
   client.on('message', (topic, payload) => {
     try {
       const data = JSON.parse(payload.toString());
-      console.log(`[MQTT] 📡 Telemetry received on [${topic}]:`, data);
+      console.log(`[MQTT] Telemetry received on [${topic}].`);
       if (onTelemetryReceived) {
         onTelemetryReceived(data);
       }
     } catch (err) {
       console.error('[MQTT] Failed to parse incoming MQTT payload:', err.message);
+      if (onTelemetryReceived) onTelemetryReceived({});
     }
   });
 
   client.on('error', (err) => {
+    isConnected = false;
+    onStatusChange({ connected: false, broker: safeBrokerUrl, topic: topicTelemetry });
     console.error('[MQTT] ❌ Connection error:', err.message);
   });
 
   client.on('offline', () => {
     isConnected = false;
+    onStatusChange({ connected: false, broker: safeBrokerUrl, topic: topicTelemetry });
     console.warn('[MQTT] ⚠️ Client went offline, attempting reconnect...');
+  });
+
+  client.on('close', () => {
+    isConnected = false;
+    onStatusChange({ connected: false, broker: safeBrokerUrl, topic: topicTelemetry });
   });
 
   function publishActuatorCommand(commandObj) {
@@ -67,7 +84,7 @@ function initMQTT(onTelemetryReceived) {
   function getStatus() {
     return {
       connected: isConnected,
-      broker: brokerUrl,
+      broker: safeBrokerUrl,
       topic: topicTelemetry
     };
   }

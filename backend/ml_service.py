@@ -9,13 +9,10 @@ and computes study comfort degradation warnings.
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Sequence
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import Ridge
-from sklearn.preprocessing import PolynomialFeatures
-from sklearn.pipeline import make_pipeline
-import datetime
 
 app = FastAPI(title="SSES ML Prediction Engine", version="1.0.0")
 
@@ -38,32 +35,72 @@ class PredictionRequest(BaseModel):
     current: ReadingTick
     history: List[ReadingTick]
 
-def forecast_series(series: np.ndarray, steps: List[int]) -> List[float]:
+def _parse_timestamp(value: Optional[str]) -> Optional[pd.Timestamp]:
+    if not value:
+        return None
+    parsed = pd.to_datetime(value, utc=True, errors="coerce")
+    return None if pd.isna(parsed) else parsed
+
+
+def forecast_series(
+    series: Sequence[float],
+    horizons_minutes: Sequence[int],
+    timestamps: Optional[Sequence[Optional[str]]] = None,
+    bounds: tuple[float, float] = (0.0, 4095.0),
+) -> List[float]:
+    """Fit a robust linear Ridge trend and damp it for long-range forecasts.
+
+    Sensor readings arrive about every two seconds. Timestamps are used when
+    available; otherwise that cadence is assumed. The fit uses the latest 60
+    readings, smooths isolated spikes with a short rolling median, and limits
+    the trend's long-range effect because a two-minute history cannot support
+    unconstrained 15–60 minute extrapolation.
     """
-    Fits a Polynomial Ridge Regression model to recent time-series ticks
-    and predicts future values for requested steps ahead.
-    """
-    n = len(series)
-    if n < 3:
-        # Fallback to linear extrapolation or last value if insufficient points
-        last_val = series[-1] if n > 0 else 25.0
-        return [float(round(last_val, 1)) for _ in steps]
-    
-    X = np.arange(n).reshape(-1, 1)
-    y = series.reshape(-1, 1)
-    
-    # Quadratic curve fitting with L2 regularization
-    model = make_pipeline(PolynomialFeatures(degree=min(2, n - 1)), Ridge(alpha=1.0))
-    model.fit(X, y)
-    
-    future_X = np.array([n - 1 + step for step in steps]).reshape(-1, 1)
-    preds = model.predict(future_X).flatten()
-    
-    # Clip bounds to physically realistic ranges
-    clamped = []
-    for p in preds:
-        clamped.append(float(round(p, 1)))
-    return clamped
+    values = np.asarray(series, dtype=float)
+    valid = np.isfinite(values)
+    values = values[valid]
+    if values.size == 0:
+        return [0.0 for _ in horizons_minutes]
+
+    parsed_times: list[Optional[pd.Timestamp]] = []
+    if timestamps is not None and len(timestamps) == len(valid):
+        parsed_times = [_parse_timestamp(t) for t, keep in zip(timestamps, valid) if keep]
+
+    if len(parsed_times) == values.size and all(t is not None for t in parsed_times):
+        time_minutes = np.array([(t - parsed_times[-1]).total_seconds() / 60.0 for t in parsed_times])
+        if np.any(np.diff(time_minutes) <= 0):
+            time_minutes = np.arange(values.size, dtype=float) * (2.0 / 60.0)
+            time_minutes -= time_minutes[-1]
+    else:
+        time_minutes = np.arange(values.size, dtype=float) * (2.0 / 60.0)
+        time_minutes -= time_minutes[-1]
+
+    values = values[-60:]
+    time_minutes = time_minutes[-60:]
+
+    # A rolling median reduces single-sample ADC/DHT spikes without erasing trend.
+    smooth = np.array([
+        np.median(values[max(0, i - 2):i + 1]) for i in range(values.size)
+    ])
+    baseline = float(np.median(smooth[-5:]))
+    slope_per_minute = 0.0
+
+    if values.size >= 5 and np.ptp(time_minutes) > 0:
+        x = (time_minutes - time_minutes[-1]).reshape(-1, 1)
+        model = Ridge(alpha=0.01)
+        model.fit(x, smooth)
+        slope_per_minute = float(model.coef_[0])
+
+    # The damped trend approaches a finite adjustment instead of growing
+    # without limit when forecasting far beyond the observed history.
+    damping_minutes = 5.0
+    lower, upper = bounds
+    forecasts = []
+    for horizon in horizons_minutes:
+        effective_minutes = damping_minutes * (1.0 - np.exp(-max(0, horizon) / damping_minutes))
+        prediction = baseline + slope_per_minute * effective_minutes
+        forecasts.append(round(float(np.clip(prediction, lower, upper)), 1))
+    return forecasts
 
 def evaluate_status(temp: float, hum: float, air_q: float) -> str:
     if 20 <= temp <= 28 and 40 <= hum <= 65 and air_q < 350:
@@ -105,18 +142,18 @@ def generate_recommendation(curr: ReadingTick, pred_15: dict, pred_30: dict, pre
     aq_30  = pred_30["airQuality"]
 
     if aq_15 >= 400 or aq_30 >= 400:
-        issues.append((3, "🌫️ Air quality is degrading fast — CO₂ and VOC buildup significantly reduces focus and memory. Open a window immediately for fresh air."))
+        issues.append((3, "🌫️ The MQ-135 reading is projected to be high. Ventilate the room and check the sensor."))
     elif aq_now >= 350:
-        issues.append((2, "🌫️ Air quality is currently poor. Stale air reduces oxygen flow to the brain, causing mental fatigue. Ventilate your study room now."))
+        issues.append((2, "🌫️ The MQ-135 reading is high. Ventilate the room and keep monitoring the sensor."))
     elif aq_15 >= 300:
-        issues.append((1, "💨 Air quality may drop in the next 15 minutes. Take a 5-minute break and ventilate before your next study session."))
+        issues.append((1, "💨 The MQ-135 reading is trending upward. Ventilate the room and keep monitoring it."))
 
     # ── Light checks ──────────────────────────────────────────────────
     light_now = curr.light
 
-    if light_now > 3800:
+    if light_now >= 3500:
         issues.append((2, "💡 Light levels are very low — studying in dim light causes eye strain and headaches within 30 minutes. Turn on your study lamp now."))
-    elif light_now > 3200:
+    elif light_now >= 2500:
         issues.append((1, "💡 Ambient light is slightly low. Adequate lighting helps sustain focus for longer study sessions. Consider brightening your workspace."))
 
     # ── Return highest-priority issue or all-clear ────────────────────
@@ -126,9 +163,9 @@ def generate_recommendation(curr: ReadingTick, pred_15: dict, pred_30: dict, pre
 
     # All-clear messages based on current conditions
     if temp_now <= 24.0 and hum_now <= 55.0 and aq_now < 300:
-        return "✅ Your study environment is in peak condition! Temperature, humidity, and air quality are all ideal. Perfect time for focused deep work — go crush it! 📚"
+        return "✅ Current readings are within the configured study ranges. Keep monitoring as conditions change."
     else:
-        return "✅ Environment forecast is stable for the next 60 minutes. Conditions are within acceptable ranges for productive studying. Stay hydrated!"
+        return "✅ Recent readings are stable and within acceptable study ranges. Keep monitoring your environment as conditions change."
 
 @app.get("/")
 def read_root():
@@ -137,39 +174,19 @@ def read_root():
 @app.post("/predict")
 def predict_environment(req: PredictionRequest):
     try:
-        # Extract history
-        history_len = len(req.history)
-        
-        if history_len == 0:
-            # Synthetic fallback based on current reading
-            t_curr = req.current.temperature
-            h_curr = req.current.humidity
-            l_curr = req.current.light
-            aq_curr = req.current.airQuality
-            
-            temps = np.array([t_curr])
-            hums = np.array([h_curr])
-            lights = np.array([l_curr])
-            aqs = np.array([aq_curr])
-        else:
-            temps = np.array([r.temperature for r in req.history])
-            hums = np.array([r.humidity for r in req.history])
-            lights = np.array([r.light for r in req.history])
-            aqs = np.array([r.airQuality for r in req.history])
-        
-        # Steps ahead (assuming 2s intervals, 15m=15, 30m=30, 60m=60 normalized ticks)
-        steps = [5, 15, 30] # Representative forecasting offsets
-        
-        pred_temps = forecast_series(temps, steps)
-        pred_hums = forecast_series(hums, steps)
-        pred_lights = forecast_series(lights, steps)
-        pred_aqs = forecast_series(aqs, steps)
-        
-        # Clamp realistic physical bounds
-        pred_temps = [max(10.0, min(50.0, t)) for t in pred_temps]
-        pred_hums = [max(10.0, min(100.0, h)) for h in pred_hums]
-        pred_lights = [max(0.0, min(4095.0, l)) for l in pred_lights]
-        pred_aqs = [max(50.0, min(1000.0, a)) for a in pred_aqs]
+        # Use the supplied recent readings, falling back to the current tick
+        # when there is no history yet. Keep timestamps aligned with each series.
+        readings = req.history or [req.current]
+        timestamps = [reading.recorded_at for reading in readings]
+
+        def forecast(attribute: str, bounds: tuple[float, float]) -> List[float]:
+            values = [getattr(reading, attribute) for reading in readings]
+            return forecast_series(values, [15, 30, 60], timestamps, bounds)
+
+        pred_temps = forecast("temperature", (-40.0, 80.0))
+        pred_hums = forecast("humidity", (0.0, 100.0))
+        pred_lights = forecast("light", (0.0, 4095.0))
+        pred_aqs = forecast("airQuality", (0.0, 4095.0))
         
         p15 = {
             "temperature": pred_temps[0],
@@ -199,16 +216,13 @@ def predict_environment(req: PredictionRequest):
         }
         
         recommendation = generate_recommendation(req.current, p15, p30, p60)
-        confidence = min(98.5, max(85.0, 92.0 + (min(history_len, 50) * 0.12)))
-        
         return {
             "success": True,
             "forecast_15m": p15,
             "forecast_30m": p30,
             "forecast_60m": p60,
             "recommendation": recommendation,
-            "confidenceScore": round(confidence, 1),
-            "modelAlgorithm": "Ridge Polynomial Time-Series Regressor"
+            "modelAlgorithm": "Damped Ridge trend (recent sensor history)"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

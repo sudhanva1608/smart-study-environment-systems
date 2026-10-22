@@ -1,102 +1,128 @@
-import React from 'react';
-import { Brain, Sparkles, Clock, AlertTriangle, CheckCircle2, Thermometer, Droplets, Wind } from 'lucide-react';
+import { useState } from 'react';
 
-export default function MLPredictionCard({ predictions }) {
-  if (!predictions) {
-    return (
-      <div className="ml-card-skeleton">
-        <Brain className="animate-spin" />
-        <span>Initializing ML Forecast Engine...</span>
+const SENSOR_NAMES = {
+  temperature: 'Temperature',
+  humidity: 'Humidity',
+  light: 'LDR ADC',
+  airQuality: 'MQ135 ADC',
+};
+
+function AlertItem({ alert, onAcknowledge }) {
+  return (
+    <article className={`alert-item alert-${alert.severity || 'warning'}`}>
+      <div className="alert-item-heading">
+        <strong>{SENSOR_NAMES[alert.sensor] || alert.sensor}</strong>
+        <span className="alert-state">{alert.status}</span>
       </div>
-    );
-  }
+      <p>{alert.reason}</p>
+      <p className="alert-action"><b>Suggested action:</b> {alert.action}</p>
+      <small>{new Date(alert.created_at).toLocaleString()}</small>
+      {alert.status === 'active' && (
+        <button className="btn-led" onClick={() => onAcknowledge(alert.id)}>Acknowledge</button>
+      )}
+    </article>
+  );
+}
 
-  const { forecast_15m, forecast_30m, forecast_60m, recommendation, confidenceScore, modelAlgorithm } = predictions;
+export default function MLPredictionCard({ recommendations = [], alerts = [], settings, settingsError = '', onAcknowledge, onSaveSettings }) {
+  const [form, setForm] = useState(null);
+  const [saved, setSaved] = useState('');
+  const [filter, setFilter] = useState('active');
+  const values = form || settings;
 
-  const horizons = [
-    { title: '15 Mins Horizon', data: forecast_15m },
-    { title: '30 Mins Horizon', data: forecast_30m },
-    { title: '60 Mins Horizon', data: forecast_60m },
-  ];
+  if (!values) return (
+    <section className="ml-prediction-section fade-in">
+      <div className="ml-header">
+        <div><h3>Recommendations &amp; Sensor Alerts</h3><span className="ml-subtitle">Rule based guidance from validated sensor readings.</span></div>
+        <span className="ml-live-chip">Monitoring offline</span>
+      </div>
+      <div className={settingsError ? 'data-warning' : 'recommendation-box'} role={settingsError ? 'alert' : 'status'}>
+        {settingsError || 'Loading saved monitoring settings…'}
+      </div>
+      <p className="ui-fallback-note">This panel needs the project backend’s monitoring API to load recommendations, alerts and editable ranges. Sensor charts remain available while it reconnects.</p>
+    </section>
+  );
 
-  const getStatusBadge = (status) => {
-    switch (status) {
-      case 'Ideal':
-        return <span className="horizon-badge status-ideal">Ideal</span>;
-      case 'Moderate':
-        return <span className="horizon-badge status-moderate">Moderate</span>;
-      default:
-        return <span className="horizon-badge status-poor">Poor</span>;
-    }
+  const change = (key, value) => setForm(current => ({ ...(current || settings), [key]: value }));
+  const changeRange = (key, field, value) => setForm(current => ({
+    ...(current || settings),
+    ranges: { ...(current || settings).ranges, [key]: { ...(current || settings).ranges[key], [field]: value } }
+  }));
+  const shownAlerts = alerts.filter(alert => filter === 'active' ? alert.status !== 'resolved' : alert.status === 'resolved');
+
+  const save = async event => {
+    event.preventDefault();
+    setSaved('');
+    try {
+      const updated = await onSaveSettings({
+        ...values,
+        sensitivity: Number(values.sensitivity),
+        persistence: Number(values.persistence),
+        cooldownMinutes: Number(values.cooldownMinutes),
+        ranges: Object.fromEntries(Object.entries(values.ranges).map(([key, range]) =>
+          [key, { min: Number(range.min), max: Number(range.max) }]))
+      });
+      if (updated) setForm(updated);
+      setSaved('Settings saved.');
+    } catch (error) { setSaved(error.message || 'Could not save settings.'); }
   };
 
   return (
-    <div className="ml-prediction-section">
+    <section className="ml-prediction-section">
       <div className="ml-header">
-        <div className="ml-title-group">
-          <div className="ml-icon-glow">
-            <Brain size={24} />
-          </div>
-          <div>
-            <h3>AI Future Predictions Engine</h3>
-            <span className="ml-subtitle">{modelAlgorithm || 'Scikit-Learn Time-Series Forecaster'} • {confidenceScore}% Confidence</span>
-          </div>
+        <div>
+          <h3>Recommendations &amp; Sensor Alerts</h3>
+          <span className="ml-subtitle">Rule based guidance from validated sensor readings; alerts indicate deviations, not automatic danger.</span>
         </div>
-        <div className="ml-live-chip">
-          <Sparkles size={14} />
-          <span>Real-time Predictive Analytics</span>
-        </div>
+        <span className="ml-live-chip">Rolling median + MAD</span>
       </div>
 
-      <div className="recommendation-box">
-        <div className="recommendation-icon">
-          <AlertTriangle size={20} className="pulse-icon" />
-        </div>
-        <div className="recommendation-content">
-          <h4>AI Smart Comfort Advisory</h4>
-          <p>{recommendation || 'Environmental trends remain optimal for focus and productivity.'}</p>
-        </div>
-      </div>
-
-      <div className="horizons-grid">
-        {horizons.map((item, idx) => (
-          <div key={idx} className="horizon-card">
-            <div className="horizon-card-header">
-              <div className="horizon-time">
-                <Clock size={16} />
-                <span>{item.title}</span>
-              </div>
-              {getStatusBadge(item.data?.status)}
-            </div>
-
-            <div className="horizon-metrics">
-              <div className="metric-row">
-                <div className="metric-meta">
-                  <Thermometer size={16} className="metric-icon temp-icon" />
-                  <span>Temperature</span>
-                </div>
-                <span className="metric-val">{item.data?.temperature ?? '--'}°C</span>
-              </div>
-
-              <div className="metric-row">
-                <div className="metric-meta">
-                  <Droplets size={16} className="metric-icon hum-icon" />
-                  <span>Humidity</span>
-                </div>
-                <span className="metric-val">{item.data?.humidity ?? '--'}%</span>
-              </div>
-
-              <div className="metric-row">
-                <div className="metric-meta">
-                  <Wind size={16} className="metric-icon aq-icon" />
-                  <span>Air Quality</span>
-                </div>
-                <span className="metric-val">{item.data?.airQuality ?? '--'} ADC</span>
-              </div>
+      <div className="recommendation-list">
+        {recommendations.map((item, index) => (
+          <div className="recommendation-box" key={item.sensor || index}>
+            <div className="recommendation-content">
+              <h4>{item.sensor ? SENSOR_NAMES[item.sensor] : 'Within preferred ranges'}</h4>
+              <p>{item.reason}</p>
+              <p className="alert-action"><b>Suggested action:</b> {item.action}</p>
             </div>
           </div>
         ))}
       </div>
-    </div>
+
+      <div className="alert-toolbar">
+        <h4>Recorded alerts</h4>
+        <div>
+          <button className={filter === 'active' ? 'alert-filter active' : 'alert-filter'} onClick={() => setFilter('active')}>Active</button>
+          <button className={filter === 'resolved' ? 'alert-filter active' : 'alert-filter'} onClick={() => setFilter('resolved')}>Resolved</button>
+        </div>
+      </div>
+      {shownAlerts.length ? (
+        <div className="alert-list">{shownAlerts.map(alert => <AlertItem key={alert.id} alert={alert} onAcknowledge={onAcknowledge} />)}</div>
+      ) : <p className="empty-alerts">No {filter} alerts recorded.</p>}
+
+      <form className="monitor-settings" onSubmit={save}>
+        <h4>Monitoring settings</h4>
+        <div className="settings-grid">
+          <label>Sensitivity (1–10)<input type="number" min="1" max="10" step="0.1" value={values.sensitivity} onChange={e => change('sensitivity', e.target.value)} /></label>
+          <label>Persistent readings (2–10)<input type="number" min="2" max="10" value={values.persistence} onChange={e => change('persistence', e.target.value)} /></label>
+          <label>Cooldown minutes<input type="number" min="1" max="1440" value={values.cooldownMinutes} onChange={e => change('cooldownMinutes', e.target.value)} /></label>
+        </div>
+        <h5>Preferred sensor ranges</h5>
+        <div className="settings-grid">
+          {[
+            ['temperature', 'Temperature °C'], ['humidity', 'Humidity %'],
+            ['airQuality', 'MQ135 ADC'], ['light', 'LDR ADC']
+          ].map(([key, label]) => (
+            <fieldset key={key}>
+              <legend>{label}</legend>
+              <label>Min<input type="number" step="any" value={values.ranges[key].min} onChange={e => changeRange(key, 'min', e.target.value)} /></label>
+              <label>Max<input type="number" step="any" value={values.ranges[key].max} onChange={e => changeRange(key, 'max', e.target.value)} /></label>
+            </fieldset>
+          ))}
+        </div>
+        <div className="settings-submit"><button className="export-btn" type="submit">Save settings</button><span>{saved}</span></div>
+        <small>MQ135 is a relative ADC reading; LDR ADC polarity is not verified here. Configure those ranges from your own observed sensor values.</small>
+      </form>
+    </section>
   );
 }
