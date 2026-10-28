@@ -3,23 +3,42 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 
 const SENSORS = [
   ['temperature', 'Room temperature', '°C', '#ff6b35'], ['humidity', 'Air moisture', '%', '#00d4ff'],
-  ['light', 'Room brightness sensor', 'ADC', '#ffd60a'], ['airQuality', 'MQ135 air sensor (raw)', 'ADC', '#00ff9d']
+  ['light', 'Room brightness', 'raw units', '#ffd60a'], ['airQuality', 'Air quality', 'raw units', '#00ff9d']
 ];
 const prettyTime = value => value ? new Date(value).toLocaleString() : '—';
 const sensorMeaning = {
   temperature: 'How warm the room may be', humidity: 'How much moisture may be in the air',
-  light: 'Raw light sensor reading in ADC counts', airQuality: 'Raw MQ135 sensor reading in ADC counts'
+  light: 'Raw reading from the brightness sensor', airQuality: 'Raw reading from the air sensor'
 };
-const methodName = method => ({ random_forest: 'Random Forest', hist_gradient_boosting: 'Histogram Gradient Boosting', persistence: 'Persistence fallback (recent reading)' }[method] || 'Method unavailable');
+const methodName = method => ({
+  random_forest: 'Estimate from past readings',
+  hist_gradient_boosting: 'Estimate from past readings',
+  persistence: 'Latest reading'
+}[method] || 'Waiting for data');
 const methodMeaning = method => ({
-  random_forest: 'Random Forest learns patterns from earlier sensor readings.',
-  hist_gradient_boosting: 'Histogram Gradient Boosting learns patterns from earlier sensor readings.',
-  persistence: 'No ML model was used; the recent reading was carried forward.'
-}[method] || 'The estimate method was not provided by the backend.');
+  random_forest: 'Uses earlier readings to estimate the next value.',
+  hist_gradient_boosting: 'Uses earlier readings to estimate the next value.',
+  persistence: 'An estimate was not ready, so this shows the newest reading.'
+}[method] || 'More readings are needed before an estimate is available.');
+const technicalMethodName = method => ({
+  random_forest: 'Random Forest',
+  hist_gradient_boosting: 'Histogram Gradient Boosting',
+  persistence: 'latest reading'
+}[method] || 'not available');
 const statusMeaning = status => ({
   model: 'Forecast ready', baseline_fallback: 'Using recent readings', pending: 'Forecast is being prepared',
   stale: 'Sensor data is out of date', unavailable: 'Forecast unavailable', insufficient_data: 'More readings needed'
 }[status] || 'Forecast status unavailable');
+const forecastReasonForDisplay = (reason, status) => {
+  if (status !== 'baseline_fallback') return reason;
+  if (/did not beat persistence/i.test(reason || '')) {
+    return 'The model estimates have been less accurate than recent sensor readings, so the latest readings are shown instead.';
+  }
+  if (/worker is unavailable|could not be loaded/i.test(reason || '')) {
+    return 'The forecast service is unavailable right now, so the latest sensor readings are shown.';
+  }
+  return 'The latest sensor readings are shown because there is not enough reliable forecast data yet.';
+};
 const displayValue = (value, key) => value != null && value !== '' && Number.isFinite(Number(value))
   ? Number(value).toFixed(key === 'temperature' || key === 'humidity' ? 1 : 0) : '—';
 
@@ -85,7 +104,7 @@ export default function ForecastPanel({ data, error, onRefresh }) {
   const status = data?.status === 'stale' ? 'stale' : (latest?.model_status || data?.status || 'unavailable');
   const sensor = SENSORS.find(item => item[0] === selected) || SENSORS[0];
   const matched = forecasts.filter(item => item.status === 'matched');
-  const modelSummary = latest ? SENSORS.map(([key, label]) => `${label}: ${methodName(latest.methods?.[key])}`).join(' · ') : '';
+  const modelSummary = latest ? SENSORS.map(([key, label]) => `${label}: ${technicalMethodName(latest.methods?.[key])}`).join(' · ') : '';
 
   return (
     <section className="forecast-panel fade-in" aria-labelledby="forecast-title">
@@ -98,9 +117,9 @@ export default function ForecastPanel({ data, error, onRefresh }) {
         <div className="recommendation-box"><b>Forecast unavailable.</b> {data?.reason || 'Waiting for a fresh reading and at least five minutes of recent history.'} The rest of the monitoring dashboard continues normally.</div>
       ) : (
         <>
-          <div className="forecast-model-note"><b>Models used for these estimates</b><span>{modelSummary}</span><small>The app checks Random Forest and Histogram Gradient Boosting against past data separately for each sensor. A sensor may use the recent-reading fallback when that works better or there is not enough usable data.</small></div>
+          <div className="forecast-model-note"><b>How to read these values</b><span>Estimates use earlier readings. If there isn’t enough information, the latest sensor reading is shown instead.</span></div>
           {data?.status === 'stale' && <div className="data-warning" role="status">{data.reason || 'The latest sensor input is stale; do not treat this forecast as current.'}</div>}
-          {latest.reason && <div className="recommendation-box"><b>{status === 'baseline_fallback' ? 'Persistence baseline in use.' : 'Forecast note.'}</b> {latest.reason}</div>}
+          {latest.reason && <div className="recommendation-box"><b>{status === 'baseline_fallback' ? 'Why recent readings are shown:' : 'Forecast note:'}</b> {forecastReasonForDisplay(latest.reason, status)}</div>}
           <div className="forecast-meta">Estimate for {prettyTime(latest.target_at)} · Last sensor reading {prettyTime(latest.source_reading_at)}</div>
           <div className="forecast-value-grid">
             {SENSORS.map(([key, label, unit, color]) => (
@@ -145,7 +164,7 @@ export default function ForecastPanel({ data, error, onRefresh }) {
                 <span>{SENSORS.map(([key, label, unit]) => `${label}: estimated ${displayValue(item.values?.[key], key)} ${unit}, measured ${displayValue(item.actual?.[key], key)} ${unit} (difference ${displayValue(item.errors?.[key], key)} ${unit})`).join(' · ')}</span>
             </div>))}</div> : <p>No estimates have reached their check time yet. Once later readings arrive, comparisons will appear here.</p>}
           </div>
-          <div className="forecast-model-footer"><b>Model details</b><span>{modelSummary}</span><small>Random Forest and Histogram Gradient Boosting are the machine-learning models evaluated here. “Persistence fallback” means the latest reading is carried forward without ML.</small></div>
+          <details className="forecast-model-footer"><summary>Technical forecast details</summary><span>{modelSummary}</span><small>Forecast methods are compared with later sensor readings. These comparisons describe past results and cannot guarantee a future reading.</small></details>
           <button className="export-btn" type="button" onClick={onRefresh}>Refresh forecast</button>
         </>
       )}

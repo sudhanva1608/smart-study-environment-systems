@@ -71,7 +71,10 @@ function initMQTT(onTelemetryReceived, onStatusChange = () => {}) {
   function publishActuatorCommand(commandObj) {
     if (client && isConnected) {
       const payload = JSON.stringify(commandObj);
-      client.publish(topicActuator, payload, { qos: 0 }, (err) => {
+      // Range settings are retained so an ESP32 that reconnects later receives
+      // the latest saved thresholds. One-shot LED overrides remain transient.
+      const options = { qos: 1, retain: Boolean(commandObj?.sensorRanges) };
+      client.publish(topicActuator, payload, options, (err) => {
         if (!err) {
           console.log(`[MQTT] 📤 Actuator command published to [${topicActuator}]:`, payload);
         } else {

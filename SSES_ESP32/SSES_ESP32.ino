@@ -50,7 +50,7 @@ unsigned long lastMsgTime = 0;
 float temperatureMin = 24.0f, temperatureMax = 30.0f;
 float humidityMin = 60.0f, humidityMax = 75.0f;
 int lightMin = 2000, lightMax = 2500;
-int airQualityMin = 700, airQualityMax = 1300;
+int airQualityMin = 0, airQualityMax = 1300;
 
 // ─── Helper: Connect Wi-Fi ─────────────────────────────────
 bool connectWiFi(uint32_t timeoutMs = 15000) {
@@ -73,36 +73,40 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
   Serial.printf("📩 [MQTT Recv] Topic: %s | Payload: %s\n", topic, message.c_str());
 
-  StaticJsonDocument<256> doc;
+  StaticJsonDocument<512> doc;
   DeserializationError err = deserializeJson(doc, message);
-  if (!err) {
-    if (doc.containsKey("ledOverride")) {
-      const char* color = doc["ledOverride"];
-      digitalWrite(GREEN_LED,  String(color) == "green"  ? HIGH : LOW);
-      digitalWrite(YELLOW_LED, String(color) == "yellow" ? HIGH : LOW);
-      digitalWrite(RED_LED,    String(color) == "red"    ? HIGH : LOW);
-    }
-    if (doc.containsKey("sensorRanges")) {
-      JsonObject ranges = doc["sensorRanges"];
-      JsonObject t = ranges["temperature"];
-      JsonObject h = ranges["humidity"];
-      JsonObject l = ranges["light"];
-      JsonObject a = ranges["airQuality"];
-      if (!t.isNull() && !h.isNull() && !l.isNull() && !a.isNull()) {
-        float tMin = t["min"] | temperatureMin, tMax = t["max"] | temperatureMax;
-        float hMin = h["min"] | humidityMin, hMax = h["max"] | humidityMax;
-        int lMin = l["min"] | lightMin, lMax = l["max"] | lightMax;
-        int aMin = a["min"] | airQualityMin, aMax = a["max"] | airQualityMax;
-        if (tMin >= -40 && tMax <= 80 && tMin <= tMax &&
-            hMin >= 0 && hMax <= 100 && hMin <= hMax &&
-            lMin >= 0 && lMax <= 4095 && lMin <= lMax &&
-            aMin >= 0 && aMax <= 4095 && aMin <= aMax) {
-          temperatureMin = tMin; temperatureMax = tMax;
-          humidityMin = hMin; humidityMax = hMax;
-          lightMin = lMin; lightMax = lMax;
-          airQualityMin = aMin; airQualityMax = aMax;
-          Serial.println("✅ Sensor preference ranges synchronized from backend.");
-        }
+  if (err) {
+    Serial.printf("❌ Actuator message JSON failed: %s\n", err.c_str());
+    return;
+  }
+  if (doc.containsKey("ledOverride")) {
+    const char* color = doc["ledOverride"];
+    digitalWrite(GREEN_LED,  String(color) == "green"  ? HIGH : LOW);
+    digitalWrite(YELLOW_LED, String(color) == "yellow" ? HIGH : LOW);
+    digitalWrite(RED_LED,    String(color) == "red"    ? HIGH : LOW);
+  }
+  if (doc.containsKey("sensorRanges")) {
+    JsonObject ranges = doc["sensorRanges"];
+    JsonObject t = ranges["temperature"];
+    JsonObject h = ranges["humidity"];
+    JsonObject l = ranges["light"];
+    JsonObject a = ranges["airQuality"];
+    if (!t.isNull() && !h.isNull() && !l.isNull() && !a.isNull()) {
+      float tMin = t["min"] | temperatureMin, tMax = t["max"] | temperatureMax;
+      float hMin = h["min"] | humidityMin, hMax = h["max"] | humidityMax;
+      int lMin = l["min"] | lightMin, lMax = l["max"] | lightMax;
+      int aMin = a["min"] | airQualityMin, aMax = a["max"] | airQualityMax;
+      if (tMin >= -40 && tMax <= 80 && tMin <= tMax &&
+          hMin >= 0 && hMax <= 100 && hMin <= hMax &&
+          lMin >= 0 && lMax <= 4095 && lMin <= lMax &&
+          aMin >= 0 && aMax <= 4095 && aMin <= aMax) {
+        temperatureMin = tMin; temperatureMax = tMax;
+        humidityMin = hMin; humidityMax = hMax;
+        lightMin = lMin; lightMax = lMax;
+        airQualityMin = aMin; airQualityMax = aMax;
+        Serial.printf("✅ Sensor ranges updated: T %.1f–%.1f, RH %.1f–%.1f, LDR %d–%d, MQ135 %d–%d. LEDs will use these ranges.\n",
+                      temperatureMin, temperatureMax, humidityMin, humidityMax,
+                      lightMin, lightMax, airQualityMin, airQualityMax);
       }
     }
   }

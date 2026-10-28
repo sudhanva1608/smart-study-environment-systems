@@ -131,8 +131,20 @@ async function getExportInfo(from, to) {
 }
 function getSettings() {
   const row = db.prepare('SELECT values_json FROM sensor_settings WHERE id=1').get();
-  try { return row ? { ...DEFAULT_SETTINGS, ...JSON.parse(row.values_json) } : { ...DEFAULT_SETTINGS }; }
-  catch { return { ...DEFAULT_SETTINGS }; }
+  let saved = {};
+  try { saved = row ? JSON.parse(row.values_json) : {}; }
+  catch { saved = {}; }
+  const settings = {
+    ...DEFAULT_SETTINGS,
+    ...saved,
+    ranges: { ...DEFAULT_SETTINGS.ranges, ...(saved.ranges || {}) }
+  };
+  // Replace the former built-in MQ135 band while preserving other saved ranges.
+  if ([1, 700].includes(settings.ranges.airQuality?.min) && settings.ranges.airQuality?.max === 1300) {
+    settings.ranges.airQuality = DEFAULT_SETTINGS.ranges.airQuality;
+    db.prepare('INSERT INTO sensor_settings(id,values_json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET values_json=excluded.values_json').run(JSON.stringify(settings));
+  }
+  return settings;
 }
 function saveSettings(value) {
   db.prepare('INSERT INTO sensor_settings(id,values_json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET values_json=excluded.values_json').run(JSON.stringify(value));

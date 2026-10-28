@@ -3,8 +3,8 @@ import { useState } from 'react';
 const SENSOR_NAMES = {
   temperature: 'Temperature',
   humidity: 'Humidity',
-  light: 'LDR ADC',
-  airQuality: 'MQ135 ADC',
+  light: 'Room brightness',
+  airQuality: 'Air quality sensor',
 };
 
 function AlertItem({ alert, onAcknowledge }) {
@@ -102,26 +102,31 @@ export default function MLPredictionCard({ recommendations = [], alerts = [], se
 
       <form className="monitor-settings" onSubmit={save}>
         <h4>Monitoring settings</h4>
+        <p className="settings-intro">These settings control when readings raise alerts and which status appears on the dashboard and LEDs.</p>
         <div className="settings-grid">
-          <label>Sensitivity (1–10)<input type="number" min="1" max="10" step="0.1" value={values.sensitivity} onChange={e => change('sensitivity', e.target.value)} /></label>
-          <label>Persistent readings (2–10)<input type="number" min="2" max="10" value={values.persistence} onChange={e => change('persistence', e.target.value)} /></label>
-          <label>Cooldown minutes<input type="number" min="1" max="1440" value={values.cooldownMinutes} onChange={e => change('cooldownMinutes', e.target.value)} /></label>
+          <label><span>Alert sensitivity (1–10)</span><input type="number" min="1" max="10" step="0.1" value={values.sensitivity} onChange={e => change('sensitivity', e.target.value)} /><small className="setting-help">Higher values ignore small changes; lower values catch them sooner.</small></label>
+          <label><span>Unusual readings to trigger an alert (2–10)</span><input type="number" min="2" max="10" value={values.persistence} onChange={e => change('persistence', e.target.value)} /><small className="setting-help">An alert waits for this many unusual readings in a row.</small></label>
+          <label><span>Wait before repeating an alert (minutes)</span><input type="number" min="1" max="1440" value={values.cooldownMinutes} onChange={e => change('cooldownMinutes', e.target.value)} /><small className="setting-help">Prevents the same sensor from sending alerts too often.</small></label>
         </div>
         <h5>Preferred sensor ranges</h5>
+        <p className="settings-intro">Readings inside a range count as Normal (green). Small misses are Moderate (yellow); large misses are Poor (red).</p>
         <div className="settings-grid">
           {[
-            ['temperature', 'Temperature °C'], ['humidity', 'Humidity %'],
-            ['airQuality', 'MQ135 ADC'], ['light', 'LDR ADC']
-          ].map(([key, label]) => (
+            ['temperature', 'Room temperature (°C)', 'Comfortable temperature for your room.'],
+            ['humidity', 'Air moisture (%)', 'Comfortable amount of moisture in the air.'],
+            ['airQuality', 'Air quality sensor', 'Sensor readings that count as normal.'],
+            ['light', 'Room brightness sensor', 'Brightness readings that count as normal.']
+          ].map(([key, label, description]) => (
             <fieldset key={key}>
               <legend>{label}</legend>
-              <label>Min<input type="number" step="any" value={values.ranges[key].min} onChange={e => changeRange(key, 'min', e.target.value)} /></label>
-              <label>Max<input type="number" step="any" value={values.ranges[key].max} onChange={e => changeRange(key, 'max', e.target.value)} /></label>
+              <small className="setting-help">{description}</small>
+              <label>Lower<input type="number" step="any" value={values.ranges[key].min} onChange={e => changeRange(key, 'min', e.target.value)} /></label>
+              <label>Upper<input type="number" step="any" value={values.ranges[key].max} onChange={e => changeRange(key, 'max', e.target.value)} /></label>
             </fieldset>
           ))}
         </div>
         <div className="settings-submit"><button className="export-btn" type="submit">Save settings</button><span>{saved}</span></div>
-        <small>MQ135 is a relative ADC reading; LDR ADC polarity is not verified here. Configure those ranges from your own observed sensor values.</small>
+        <small>Air quality and brightness use raw sensor readings. Their typical values depend on your sensor and room.</small>
       </form>
     </section>
   );

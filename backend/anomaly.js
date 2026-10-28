@@ -7,7 +7,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     // 500-reading baseline (T≈27°C, RH≈69%, LDR≈2900, MQ135≈900 ADC).
     temperature: { min: 24, max: 30 },
     humidity: { min: 60, max: 75 },
-    airQuality: { min: 700, max: 1300 },
+    airQuality: { min: 0, max: 1300 },
     light: { min: 2000, max: 2500 }
   }
 });

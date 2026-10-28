@@ -16,7 +16,7 @@ import './index.css';
 const BACKEND_URL = '';
 const DEFAULT_RANGES = {
   temperature: { min: 24, max: 30 }, humidity: { min: 60, max: 75 },
-  airQuality: { min: 700, max: 1300 }, light: { min: 2000, max: 2500 }
+  airQuality: { min: 0, max: 1300 }, light: { min: 2000, max: 2500 }
 };
 
 function clamp(val, min, max) { return Math.min(Math.max(val, min), max); }
@@ -53,6 +53,16 @@ function getRangePill(value, range, neutralLabel) {
   return value >= range.min && value <= range.max
     ? { cls: 'pill-good', label: neutralLabel }
     : { cls: 'pill-warn', label: 'CHECK RANGE' };
+}
+
+function getAirQualityCondition(value, range) {
+  if (value == null) return { cls: 'pill-neutral', label: 'NO DATA' };
+  if (value >= range.min && value <= range.max) return { cls: 'pill-good', label: 'NORMAL' };
+  const margin = Math.max((range.max - range.min) * 0.5, 1);
+  const poor = value < range.min - margin || value > range.max + margin;
+  return poor
+    ? { cls: 'pill-bad', label: 'POOR' }
+    : { cls: 'pill-warn', label: 'MODERATE' };
 }
 
 function getEnvironmentStatus(reading, ranges) {
@@ -378,6 +388,8 @@ export default function App() {
   const preferredRanges = settings?.ranges ? {
     ...DEFAULT_RANGES,
     ...settings.ranges,
+    airQuality: [1, 700].includes(settings.ranges.airQuality?.min) && settings.ranges.airQuality?.max === 1300
+      ? DEFAULT_RANGES.airQuality : (settings.ranges.airQuality || DEFAULT_RANGES.airQuality),
     // Treat the previous app default as a legacy setting after the LDR band
     // was corrected to the user's specified 2000–2500 ADC range.
     light: settings.ranges.light?.min === 2500 && settings.ranges.light?.max === 3600
@@ -396,7 +408,7 @@ export default function App() {
   const tempPill  = data ? getRangePill(data.temperature, preferredRanges.temperature, 'IN RANGE') : null;
   const humPill   = data ? getRangePill(data.humidity, preferredRanges.humidity, 'IN RANGE') : null;
   const airAdc = data?.airQuality ?? null;
-  const airPill   = data ? { cls: 'pill-neutral', label: 'ROUGH ESTIMATE*' } : null;
+  const airPill   = getAirQualityCondition(airAdc, preferredRanges.airQuality);
   const lightPill = data ? getRangePill(data.light, preferredRanges.light, 'NORMAL') : null;
 
   const tempBar  = data ? clamp(((data.temperature - 0) / 50) * 100, 0, 100) : 0;
@@ -477,7 +489,7 @@ export default function App() {
           <SensorCard type="air"   icon="🌫️" label="MQ135 AIR QUALITY (RAW)" value={airAdc} unit="ADC" min={preferredRanges.airQuality.min} max={preferredRanges.airQuality.max} barPercent={airBar} pill={airPill} />
           <SensorCard type="light" icon="💡" label="AMBIENT LIGHT (LDR)"   value={data?.light}      unit="ADC" min="0"    max="4095"   barPercent={lightBar} pill={lightPill} />
         </div>
-        <p className="estimate-note">MQ135 value is shown as raw ADC. It is a relative sensor reading, not calibrated ppm.</p>
+        <p className="air-condition-note">Air conditions are based on the configured ADC range. MQ135 readings are not calibrated to ppm.</p>
 
         {/* ── Tab Nav ── */}
         <div className="tab-nav">

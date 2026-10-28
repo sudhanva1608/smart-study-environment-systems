@@ -20,8 +20,10 @@ test('median handles even and odd sample counts', () => {
 test('environment status follows preferred ranges and gives a buffer around them', () => {
   const typical = { temperature: 27, humidity: 69, light: 2300, airQuality: 900 };
   assert.equal(getEnvironmentStatus(typical), 'Ideal');
+  assert.equal(DEFAULT_SETTINGS.ranges.airQuality.min, 0);
+  assert.equal(getEnvironmentStatus({ ...typical, airQuality: 0 }), 'Ideal');
   assert.equal(getEnvironmentStatus({ ...typical, humidity: 78 }), 'Moderate');
-  assert.equal(getEnvironmentStatus({ ...typical, airQuality: 1800 }), 'Poor');
+  assert.equal(getEnvironmentStatus({ ...typical, airQuality: 2000 }), 'Poor');
 });
 
 test('sustained deviations create one alert and normal readings resolve it', async () => {
